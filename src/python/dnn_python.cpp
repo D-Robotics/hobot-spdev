@@ -310,7 +310,12 @@ static PyTypeObject TensorPropertiesType = {
 static PyObject *PyDNNTensor_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
 {
     PyDNNTensor *self = (PyDNNTensor *)type->tp_alloc(type, 0);
+    self->buffer = nullptr;
     return (PyObject *)self;
+}
+
+static void PyDNNTensor_dealloc(PyDNNTensor* self) {
+    self->ob_base.ob_type->tp_free(self);
 }
 
 // 构造函数：初始化类的属性
@@ -356,11 +361,8 @@ static PyObject* PyDNNTensor_get_properties(PyDNNTensor *self, void *closure) {
 // 获取 buffer 成员属性的 getter 函数
 static PyObject* PyDNNTensor_get_buffer(PyDNNTensor *self, void *closure) {
     // 将 self->buffer 转换为 Python 对象并返回
-    // 假设你有一个函数可以将 C 结构体转换为 PyObject
-
     return buffer_2_pyarray(self->buffer, self->properties);
 }
-
 static int32_t GetInputName(hbDNNHandle_t dnn_handle, int32_t input_index,
                        char *input_name) {
     const char *name = NULL;
@@ -386,7 +388,6 @@ static int32_t GetOutputName(hbDNNHandle_t dnn_handle, int32_t output_index,
 // 获取 name 成员属性的 getter 函数
 static PyObject* PyDNNTensor_get_name(PyDNNTensor *self, void *closure) {
     // 将 self->name 转换为 Python 对象并返回
-
     return PyUnicode_FromString(self->name);
 }
 
@@ -403,7 +404,7 @@ static PyTypeObject PyDNNTensorType = {
     "dnnpy.PyDNNTensor",                        /* tp_name */
     sizeof(PyDNNTensor),                           /* tp_basicsize */
     0,                                             /* tp_itemsize */
-    0,                                             /* tp_dealloc */
+    (destructor)PyDNNTensor_dealloc,               /* tp_dealloc */
     0,                                             /* tp_print */
     0,                                             /* tp_getattr */
     0,                                             /* tp_setattr */
@@ -440,36 +441,35 @@ static PyTypeObject PyDNNTensorType = {
     0,                                             /* tp_free */
 };
 
-static PyObject *Model_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
-{
-    Model_Object *self = (Model_Object *)type->tp_alloc(type, 0);
-    return (PyObject *)self;
-}
-
 // 释放模型张量资源
 static void release_model_tensor(Model_Object *model_obj)
 {
-    if (model_obj->m_inputs != NULL) {
+    if (model_obj->m_inputs != nullptr) {
         // 释放输入张量数组的内存
         for (int i = 0; i < model_obj->m_input_count; ++i) {
-            if (model_obj->m_inputs[i].sysMem == NULL) {
+            if (model_obj->m_inputs[i].sysMem != nullptr) {
                 hbSysFreeMem(model_obj->m_inputs[i].sysMem);
             }
         }
         free(model_obj->m_inputs);
-        model_obj->m_inputs = NULL;
+        model_obj->m_inputs = nullptr;
     }
 
-    if (model_obj->m_outputs != NULL) {
+    if (model_obj->m_outputs != nullptr) {
         // 释放输出张量数组的内存
         for (int i = 0; i < model_obj->m_output_count; ++i) {
-            if (model_obj->m_outputs[i].sysMem == NULL) {
+            if (model_obj->m_outputs[i].sysMem != nullptr) {
                 hbSysFreeMem(model_obj->m_outputs[i].sysMem);
             }
         }
         free(model_obj->m_outputs);
-        model_obj->m_outputs = NULL;
+        model_obj->m_outputs = nullptr;
     }
+}
+static PyObject *Model_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
+{
+    Model_Object *self = (Model_Object *)type->tp_alloc(type, 0);
+    return (PyObject *)self;
 }
 
 static void Model_dealloc(Model_Object *self)
@@ -508,7 +508,7 @@ static PyObject* model_get_tensor_inputs(Model_Object *self, void *closure) {
 
     for (int i = 0; i < self->m_input_count; i++) {
         // 创建一个 Model 对象
-        PyDNNTensor *dnn_tensor = PyObject_New(PyDNNTensor, &PyDNNTensorType);
+        PyDNNTensor *dnn_tensor = (PyDNNTensor *)PyDNNTensor_new(&PyDNNTensorType, NULL, NULL);
         if (dnn_tensor == NULL) {
             PyErr_SetString(PyExc_RuntimeError, "Failed to create dnn_tensor object");
             Py_DECREF(inputs_list);
@@ -520,7 +520,7 @@ static PyObject* model_get_tensor_inputs(Model_Object *self, void *closure) {
 
         // 将张量对象添加到列表中
         PyList_Append(inputs_list, (PyObject *)dnn_tensor);
-        Py_DECREF(dnn_tensor);
+        Py_DECREF(dnn_tensor);  // 引用计数管理交给 inputs_list
     }
 
     return inputs_list;
@@ -533,7 +533,6 @@ static PyObject* model_get_tensor_outputs(Model_Object *self, void *closure) {
         PyErr_SetString(PyExc_RuntimeError, "Failed to create outputs list.");
         return NULL;
     }
-
 
     for (int i = 0; i < self->m_output_count; i++) {
         // 创建一个 PyDNNTensor 对象
@@ -557,7 +556,7 @@ static PyObject* model_get_tensor_outputs(Model_Object *self, void *closure) {
             Py_DECREF(outputs_list);
             return NULL;
         }
-        Py_DECREF(dnn_tensor);
+        Py_DECREF(dnn_tensor);  // 引用计数管理交给 outputs_list
     }
 
     return outputs_list;
@@ -668,15 +667,15 @@ static PyObject *Model_forward(Model_Object *self, PyObject *args, PyObject *kwa
     // 这里假设 forward 函数接受一个 PyArrayObject* 类型的参数以及两个整数参数
     int32_t result = forward(self, arg_data_ptr, nv12_size, core_id, priority);
 
-    Py_DECREF(arg_array);
-
     // 处理 forward 函数的返回值并返回相应的结果
     if (result == -1) {
         // 处理 forward 函数执行失败的情况
         printf("arg_height=%d arg_width=%d, arg_channels=%d\n", arg_height, arg_width, arg_channels);
+        Py_DECREF(arg_array);
         Py_RETURN_NONE;
     }
 
+	Py_DECREF(arg_array);
     // 返回 forward 函数执行成功的情况
     return model_get_tensor_outputs(self, NULL);
 }
@@ -736,6 +735,7 @@ static PyTypeObject ModelType = {
     (newfunc)Model_new,                            /* tp_new */
     0,                                             /* tp_free */
 };
+
 
 static int32_t prepare_model_tensor(Model_Object *model_obj)
 {
@@ -849,79 +849,74 @@ static PyObject *Dnnpy_load(PyObject *self, PyObject *args, PyObject *kwargs)
 
     // 解析参数
     static const char *keywords[] = {"model_file", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O", (char **)keywords, &model_file_arg)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O", const_cast<char **>(keywords), &model_file_arg)) {
         return NULL;
     }
 
-    PyObject *model_file_list = NULL;
-
-    // 如果是单个字符串，包装成列表
+    // 检查传入参数的类型
     if (PyUnicode_Check(model_file_arg)) {
-        model_file_list = PyList_New(1);
+        // 如果参数是字符串类型，则将其转换为一个包含单个元素的列表
+        PyObject *model_file_list = PyList_New(1);
         if (model_file_list == NULL) {
             PyErr_SetString(PyExc_RuntimeError, "Failed to create model file list");
             return NULL;
         }
-        Py_INCREF(model_file_arg);  // 增加引用计数，列表会持有它
         PyList_SET_ITEM(model_file_list, 0, model_file_arg);
-    } else if (PyList_Check(model_file_arg)) {
-        Py_INCREF(model_file_arg);  // 保持引用计数一致
-        model_file_list = model_file_arg;
-    } else {
-        PyErr_SetString(PyExc_TypeError, "model_file must be a string or a list of strings");
+        model_file_arg = model_file_list;
+    } else if (!PyList_Check(model_file_arg)) {
+        // 参数既不是字符串也不是列表，返回错误
+        PyErr_SetString(PyExc_TypeError, "model_file must be a string or a list");
         return NULL;
     }
 
     // 创建一个空的模型列表
     PyObject *model_list = PyList_New(0);
     if (model_list == NULL) {
-        Py_DECREF(model_file_list);
         PyErr_SetString(PyExc_RuntimeError, "Failed to create model list");
         return NULL;
     }
 
-    // 遍历加载模型文件
-    Py_ssize_t num_files = PyList_Size(model_file_list);
-
+    // 遍历加载模型文件并创建模型对象
+    Py_ssize_t num_files = PyList_Size(model_file_arg);
     for (Py_ssize_t i = 0; i < num_files; ++i) {
-        PyObject *model_file_obj = PyList_GetItem(model_file_list, i); // Borrowed reference
+        PyObject *model_file_obj = PyList_GetItem(model_file_arg, i);
         if (!PyUnicode_Check(model_file_obj)) {
             PyErr_SetString(PyExc_TypeError, "model_file must be a string or a list of strings");
             Py_DECREF(model_list);
-            Py_DECREF(model_file_list);
             return NULL;
         }
-
         const char *model_file = PyUnicode_AsUTF8(model_file_obj);
         if (model_file == NULL) {
             PyErr_SetString(PyExc_RuntimeError, "Failed to convert model file path to UTF-8");
             Py_DECREF(model_list);
-            Py_DECREF(model_file_list);
             return NULL;
         }
 
-        // 创建并加载 Model 对象
-        Model_Object *model = create_and_load_model(model_file);
+        // 创建一个 Model 对象
+        Model_Object *model = PyObject_New(Model_Object, &ModelType);
+        if (model == NULL) {
+            PyErr_SetString(PyExc_RuntimeError, "Failed to create Model object");
+            Py_DECREF(model_list);
+            return NULL;
+        }
+
+        // 创建并加载模型，省略部分代码
+        model = create_and_load_model(model_file);
         if (model == NULL) {
             Py_DECREF(model_list);
-            Py_DECREF(model_file_list);
             return NULL;
         }
 
-        // 将 Model 对象添加到模型列表
+        // 将 Model 对象添加到模型列表中
         if (PyList_Append(model_list, (PyObject *)model) != 0) {
             PyErr_SetString(PyExc_RuntimeError, "Failed to append Model object to model list");
             Py_DECREF(model);
             Py_DECREF(model_list);
-            Py_DECREF(model_file_list);
             return NULL;
         }
-
-        Py_DECREF(model); // 释放本地引用，只保留列表的引用
     }
 
-    Py_DECREF(model_file_list); // 释放我们增加的引用
-
+    // 返回模型列表
     return model_list;
 }
 
