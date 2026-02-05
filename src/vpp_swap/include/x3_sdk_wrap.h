@@ -135,6 +135,7 @@ typedef struct
     int32_t raw_height;
     int32_t raw_width;
     int32_t fps;
+    int32_t bit;
 } x3_sensors_parameters;
 typedef struct x3_vin_info {
     /*定义 sensor   初始化的属性信息 */
