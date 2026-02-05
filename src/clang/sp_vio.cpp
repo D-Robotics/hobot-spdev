@@ -10,6 +10,8 @@
 
 #include "sp_vio.h"
 
+#define ALIGN_UP(a, size) (((a) + (size)-1u) & (~((size)-1u)))
+
 using namespace srpy_cam;
 
 void *sp_init_vio_module()
@@ -48,6 +50,8 @@ int32_t sp_open_camera(void *obj, const int32_t pipe_id, const int32_t video_ind
     return -1;
 }
 
+static sp_sensors_parameters params;
+
 int32_t sp_open_camera_v2(void *obj, const int32_t pipe_id, const int32_t video_index, int32_t chn_num, sp_sensors_parameters *parameters, int32_t *input_width, int32_t *input_height)
 {
     if (obj != NULL)
@@ -65,6 +69,7 @@ int32_t sp_open_camera_v2(void *obj, const int32_t pipe_id, const int32_t video_
             chn_num++;
         }
         x3_sensors_parameters *_parameters = (x3_sensors_parameters *)parameters;
+        params.bit = parameters->bit;
         // _parameters.fps = parameters->fps;
         // _parameters.raw_width = parameters->raw_width;
         // _parameters.raw_height = parameters->raw_height;
@@ -127,7 +132,23 @@ int32_t sp_vio_get_raw(void *obj, char *frame_buffer, int32_t width, int32_t hei
         ImageFrame *temp_ptr = new ImageFrame;
         if (!sp->GetImageFrame(temp_ptr, module_enum, width, height, timeout))
         {
-            memcpy(frame_buffer, temp_ptr->data[0], temp_ptr->data_size[0]);
+            params.bit = params.bit ? params.bit : 8;
+
+            uint32_t width_size = (uint32_t)(width * params.bit / 8);
+
+            if (width_size % 16 == 0) {
+                memcpy(frame_buffer, temp_ptr->data[0], temp_ptr->data_size[0]);
+            } else {
+                uint32_t width_stride = ALIGN_UP(width_size, 16);
+
+                for (int row = 0; row < height; row++) {
+                    const uint8_t *src_row_start = temp_ptr->data[0] + (row * width_stride);
+                    uint8_t *dst_row_start = (uint8_t *)frame_buffer + (row * width_size);
+
+                    memcpy(dst_row_start, src_row_start, width_size);
+                }
+            }
+
             if (temp_ptr->plane_count > 1)
                 memcpy(frame_buffer + temp_ptr->data_size[0], temp_ptr->data[1], temp_ptr->data_size[1]);
             sp->ReturnImageFrame(temp_ptr, module_enum, width, height); // delete temp_ptr->frame_info

@@ -22,6 +22,7 @@ typedef struct
         int32_t raw_height;
         int32_t raw_width;
         int32_t fps;
+        int32_t bit;
 } sp_sensors_parameters;
 
 #ifdef __cplusplus
