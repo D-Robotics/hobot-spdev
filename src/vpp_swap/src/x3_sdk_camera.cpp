@@ -55,6 +55,69 @@ static int vps_select_chn(int *chn_en, int src_width, int src_height, int dst_wi
     return -1;
 }
 
+/*
+ * VPS output size rules (vs. src); on failure logs with LOGW_print and returns 0.
+ * - width/height in [32, 4096]
+ * - width multiple of 4, height even
+ * - upscale: at most 1.5x per axis when dst > src
+ * - downscale: when dst < src, require 8*dst > src (strictly above 1/8)
+ */
+static int vps_dst_dims_valid(int src_w, int src_h, int dst_w, int dst_h)
+{
+    if (dst_w < 32 || dst_w > 4096) {
+        LOGW_print("Invalid VPS dst: src %dx%d -> dst %dx%d, reason: dst width %d out of range "
+                   "[32,4096]\n",
+                   src_w, src_h, dst_w, dst_h, dst_w);
+        return 0;
+    }
+    if (dst_h < 32 || dst_h > 4096) {
+        LOGW_print("Invalid VPS dst: src %dx%d -> dst %dx%d, reason: dst height %d out of range "
+                   "[32,4096]\n",
+                   src_w, src_h, dst_w, dst_h, dst_h);
+        return 0;
+    }
+    if ((dst_w % 4) != 0) {
+        LOGW_print("Invalid VPS dst: src %dx%d -> dst %dx%d, reason: dst width %d is not a "
+                   "multiple of 4\n",
+                   src_w, src_h, dst_w, dst_h, dst_w);
+        return 0;
+    }
+    if ((dst_h % 2) != 0) {
+        LOGW_print("Invalid VPS dst: src %dx%d -> dst %dx%d, reason: dst height %d is not even\n",
+                   src_w, src_h, dst_w, dst_h, dst_h);
+        return 0;
+    }
+    /* horizontal upscale <= 1.5x: 2*dst_w <= 3*src_w */
+    if (dst_w > src_w && (long long)dst_w * 2 > (long long)src_w * 3) {
+        LOGW_print("Invalid VPS dst: src %dx%d -> dst %dx%d, reason: horizontal upscale exceeds "
+                   "1.5x (dst_w=%d, src_w=%d, max width=%d)\n",
+                   src_w, src_h, dst_w, dst_h, dst_w, src_w, (src_w * 3) / 2);
+        return 0;
+    }
+    /* horizontal downscale: require 8*dst_w > src_w */
+    if (dst_w < src_w && (long long)dst_w * 8 <= (long long)src_w) {
+        LOGW_print("Invalid VPS dst: src %dx%d -> dst %dx%d, reason: horizontal downscale limit, "
+                   "need 8*dst_w>src_w (dst_w=%d, src_w=%d)\n",
+                   src_w, src_h, dst_w, dst_h, dst_w, src_w);
+        return 0;
+    }
+    /* vertical upscale <= 1.5x */
+    if (dst_h > src_h && (long long)dst_h * 2 > (long long)src_h * 3) {
+        LOGW_print("Invalid VPS dst: src %dx%d -> dst %dx%d, reason: vertical upscale exceeds "
+                   "1.5x (dst_h=%d, src_h=%d, max height=%d)\n",
+                   src_w, src_h, dst_w, dst_h, dst_h, src_h, (src_h * 3) / 2);
+        return 0;
+    }
+    /* vertical downscale: require 8*dst_h > src_h */
+    if (dst_h < src_h && (long long)dst_h * 8 <= (long long)src_h) {
+        LOGW_print("Invalid VPS dst: src %dx%d -> dst %dx%d, reason: vertical downscale limit, "
+                   "need 8*dst_h>src_h (dst_h=%d, src_h=%d)\n",
+                   src_w, src_h, dst_w, dst_h, dst_h, src_h);
+        return 0;
+    }
+    return 1;
+}
+
 int x3_cam_init_param(x3_modules_info_t *info, const int pipe_id, const int video_index, int fps,
                 int chn_num,x3_sensors_parameters *parameters, int *width, int *height)
 {
@@ -145,6 +208,10 @@ int x3_cam_init_param(x3_modules_info_t *info, const int pipe_id, const int vide
         }
         chn_data = vps_select_chn(&chn_en, mipi_width, mipi_height, width[i], height[i]);
         if (chn_data >= 0) {
+            if(!vps_dst_dims_valid(mipi_width, mipi_height, width[i], height[i])) {
+                LOGE_print("Invalid VPS dst: src %dx%d -> dst %dx%d\n", mipi_width, mipi_height, width[i], height[i]);
+                return -1;
+            }
             ret |= vps_chn_param_init(&info->m_vps_infos.m_vps_info[0].m_vps_chn_attrs[chn_index],
                     chn_data, width[i], height[i], fps);
             chn_en |= 1 << chn_data;
@@ -204,6 +271,11 @@ int x3_cam_vps_init_param(x3_modules_info_t *info, const int pipe_id, int chn_nu
             break;
         default:
             break;
+        }
+
+        if(!vps_dst_dims_valid(src_width, src_height, dst_width[i], dst_height[i])) {
+            LOGE_print("Invalid VPS dst: src %dx%d -> dst %dx%d\n", src_width, src_height, dst_width[i], dst_height[i]);
+            return -1;
         }
 
         chn_data = vps_select_chn(&chn_en, src_width, src_height, dst_width[i], dst_height[i]);
