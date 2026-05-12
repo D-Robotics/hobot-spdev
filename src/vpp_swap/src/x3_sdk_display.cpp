@@ -362,6 +362,38 @@ int write_to_node(const char* node_path, const char* content) {
     return 0;
 }
 
+/*
+ * Same rule as run_hobot_display_service.sh cmd_line_parse:
+ * token video=... — value contains "mipi" -> MIPI DSI; contains hdmi path -> BT1120.
+ * If no video= token, use fallback (caller default HB_VOT_OUTPUT_BT1120).
+ */
+static int vot_out_mode_from_proc_cmdline(int fallback)
+{
+    std::ifstream fs("/proc/cmdline");
+    std::string line;
+
+    if (!std::getline(fs, line))
+        return fallback;
+
+    std::istringstream iss(line);
+    std::string tok;
+
+    while (iss >> tok) {
+        static const char pref[] = "video=";
+        const size_t plen = sizeof(pref) - 1U;
+
+        if (tok.size() > plen && tok.compare(0, plen, pref) == 0) {
+            std::string val = tok.substr(plen);
+
+            if (val.find("mipi") != std::string::npos)
+                return HB_VOT_OUTPUT_MIPI;
+            return HB_VOT_OUTPUT_BT1120;
+        }
+    }
+
+    return fallback;
+}
+
 static void vot_set_upscale_attr(VOT_UPSCALE_ATTR_S *upscale_attr, int width, int height)
 {
     float k_up, k_up_w, k_up_h;
@@ -405,7 +437,9 @@ int VPPDisplay::x3_vot_init(int chn = 0, int width = 1920, int height = 1080,
         m_width = width;
         m_height = height;
         m_vot_intf = vot_intf;
-        m_vot_out_mode = vot_out_mode;
+        m_vot_out_mode = vot_out_mode_from_proc_cmdline(vot_out_mode);
+        LOGI_print("VOT output mode: %s (cmdline video= overrides arg when set)\n",
+                   m_vot_out_mode == HB_VOT_OUTPUT_MIPI ? "MIPI_DSI" : "HDMI_BT1120");
 
         devAttr.enIntfSync = static_cast<VOT_INTF_SYNC_E>(m_vot_intf);
         devAttr.u32BgColor = 0x8080;
